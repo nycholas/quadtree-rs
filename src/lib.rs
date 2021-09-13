@@ -4,7 +4,7 @@
 use std::fmt;
 use std::ops::Deref;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Point {
     x: f64,
     y: f64,
@@ -40,6 +40,19 @@ pub struct Item<'a, T> {
     data: &'a T,
 }
 
+impl<'a, T> Item<'a, T>
+where
+    T: 'a,
+{
+    pub fn new(point: Point, data: &'a T) -> Self {
+        Self { point, data }
+    }
+
+    pub fn data(&self) -> &'a T {
+        self.data
+    }
+}
+
 impl<'a, T> Deref for Item<'a, T> {
     type Target = T;
 
@@ -48,22 +61,13 @@ impl<'a, T> Deref for Item<'a, T> {
     }
 }
 
-impl<'a, T> Item<'a, T>
-where
-    T: 'a,
-{
-    pub fn new(point: Point, data: &'a T) -> Self {
-        Self { point, data }
-    }
-}
-
 impl<'a, T> Position for Item<'a, T> {
     fn position(&self) -> Point {
-        Point::new(self.point.x, self.point.y)
+        self.point
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Rectangle {
     x: f64,
     y: f64,
@@ -95,21 +99,20 @@ impl fmt::Display for Rectangle {
     }
 }
 
-impl PartialEq<Rectangle> for Rectangle {
-    fn eq(&self, other: &Rectangle) -> bool {
-        self.x == other.x
-            && self.y == other.y
-            && self.width == other.width
-            && self.height == other.height
-    }
+pub struct Options {
+    pub max_items: usize,
+    pub max_depth: u8,
+    pub depth: u8,
 }
 
-impl Eq for Rectangle {}
-
-pub struct Options {
-    max_items: usize,
-    max_depth: u8,
-    depth: u8,
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            max_items: 20,
+            max_depth: 3,
+            depth: 0,
+        }
+    }
 }
 
 pub struct Quadtree<T> {
@@ -124,10 +127,15 @@ pub struct Quadtree<T> {
 
 impl<T: Position> Quadtree<T> {
     pub fn new(boundary: Rectangle) -> Self {
-        Self::with_options(boundary, None)
+        Self::with_options(
+            boundary,
+            Options {
+                ..Default::default()
+            },
+        )
     }
 
-    pub fn with_options(boundary: Rectangle, optional_options: Option<Options>) -> Self {
+    pub fn with_options(boundary: Rectangle, options: Options) -> Self {
         Self {
             x: boundary.x,
             y: boundary.y,
@@ -135,11 +143,7 @@ impl<T: Position> Quadtree<T> {
             height: boundary.height,
             items: Vec::new(),
             children: None,
-            options: optional_options.unwrap_or(Options {
-                max_items: 20,
-                max_depth: 3,
-                depth: 0,
-            }),
+            options,
         }
     }
 
@@ -148,7 +152,9 @@ impl<T: Position> Quadtree<T> {
             return;
         }
 
-        if self.items.len() < self.options.max_items && self.options.depth < self.options.max_depth
+        if self.children.is_none()
+            && self.items.len() < self.options.max_items
+            && self.options.depth < self.options.max_depth
         {
             self.items.push(item);
             return;
@@ -183,14 +189,9 @@ impl<T: Position> Quadtree<T> {
         match self.children {
             Some(ref children) => {
                 let mut items = Vec::<&T>::new();
-                if self._intersects(&range, &self.bounds()) {
+                if self.intersects(&range, &self.bounds()) {
                     for child in children {
-                        items.extend(child.query(Rectangle::new(
-                            range.x,
-                            range.y,
-                            range.width,
-                            range.height,
-                        )));
+                        items.extend(child.query(range));
                     }
                 }
                 items
@@ -218,11 +219,7 @@ impl<T: Position> Quadtree<T> {
             && point.y <= boundary.y + boundary.height
     }
 
-    fn intersects(&self, rectangle: &Rectangle) -> bool {
-        self._intersects(rectangle, &self.bounds())
-    }
-
-    fn _intersects(&self, rectangle: &Rectangle, boundary: &Rectangle) -> bool {
+    fn intersects(&self, rectangle: &Rectangle, boundary: &Rectangle) -> bool {
         rectangle.x < boundary.x + boundary.width
             && rectangle.x + rectangle.width > boundary.x
             && rectangle.y < boundary.y + boundary.height
@@ -235,35 +232,35 @@ impl<T: Position> Quadtree<T> {
         [
             Box::new(Quadtree::with_options(
                 Rectangle::new(self.x, self.y, w, h),
-                Some(Options {
+                Options {
                     max_items: self.options.max_items,
                     max_depth: self.options.max_depth,
                     depth: self.options.depth + 1,
-                }),
+                },
             )),
             Box::new(Quadtree::with_options(
                 Rectangle::new(self.x + w, self.y, w, h),
-                Some(Options {
+                Options {
                     max_items: self.options.max_items,
                     max_depth: self.options.max_depth,
                     depth: self.options.depth + 1,
-                }),
+                },
             )),
             Box::new(Quadtree::with_options(
                 Rectangle::new(self.x + w, self.y + h, w, h),
-                Some(Options {
+                Options {
                     max_items: self.options.max_items,
                     max_depth: self.options.max_depth,
                     depth: self.options.depth + 1,
-                }),
+                },
             )),
             Box::new(Quadtree::with_options(
                 Rectangle::new(self.x, self.y + h, w, h),
-                Some(Options {
+                Options {
                     max_items: self.options.max_items,
                     max_depth: self.options.max_depth,
                     depth: self.options.depth + 1,
-                }),
+                },
             )),
         ]
     }
@@ -377,22 +374,15 @@ mod tests {
     #[test]
     fn test_intersects() {
         let q1 = Quadtree::<Item<String>>::new(Rectangle::new(0.0, 0.0, 100.0, 100.0));
-        assert!(q1.intersects(&Rectangle::new(20.0, 10.0, 10.0, 10.0)));
-        assert!(!q1.intersects(&Rectangle::new(-5.0, -5.0, -50.0, -50.0)));
-    }
-
-    #[test]
-    fn test_intersects_() {
-        let q1 = Quadtree::<Item<String>>::new(Rectangle::new(0.0, 0.0, 100.0, 100.0));
-        assert!(q1._intersects(
+        assert!(q1.intersects(
             &Rectangle::new(5.0, 5.0, 50.0, 50.0),
             &Rectangle::new(20.0, 10.0, 10.0, 10.0)
         ));
-        assert!(q1._intersects(
+        assert!(q1.intersects(
             &Rectangle::new(5.0, 5.0, 50.0, 50.0),
             &Rectangle::new(5.0, 5.0, 50.0, 50.0)
         ));
-        assert!(!q1._intersects(
+        assert!(!q1.intersects(
             &Rectangle::new(5.0, 5.0, 50.0, 50.0),
             &Rectangle::new(55.0, 55.0, 50.0, 50.0)
         ));
@@ -451,6 +441,71 @@ mod tests {
         assert_eq!(south_east.options.max_depth, 3);
         assert_eq!(south_east.options.depth, 1);
         assert_eq!(south_east_pos, (0.0, 50.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn test_put_and_subdivide() {
+        let entity = ();
+
+        let mut qt = Quadtree::with_options(
+            Rectangle::new(0.0, 0.0, 200.0, 200.0),
+            Options {
+                max_items: 1,
+                ..Default::default()
+            },
+        );
+        qt.put(Item::new(Point::new(10.0, 10.0), &entity));
+        qt.put(Item::new(Point::new(110.0, 10.0), &entity));
+        qt.put(Item::new(Point::new(110.0, 110.0), &entity));
+        qt.put(Item::new(Point::new(10.0, 110.0), &entity));
+        match qt.children {
+            Some([ref c1, ref c2, ref c3, ref c4]) => {
+                assert_eq!(c1.x, 0.0);
+                assert_eq!(c1.y, 0.0);
+                assert_eq!(c1.width, 100.0);
+                assert_eq!(c1.height, 100.0);
+                assert_eq!(c1.options.max_items, 1);
+                assert_eq!(c1.options.max_depth, 3);
+                assert_eq!(c1.options.depth, 1);
+                assert_eq!(c1.items.len(), 1);
+                assert_eq!(c1.items[0].point, Point::new(10.0, 10.0));
+                assert!(c1.children.is_none());
+
+                assert_eq!(c2.x, 100.0);
+                assert_eq!(c2.y, 0.0);
+                assert_eq!(c2.width, 100.0);
+                assert_eq!(c2.height, 100.0);
+                assert_eq!(c2.options.max_items, 1);
+                assert_eq!(c2.options.max_depth, 3);
+                assert_eq!(c2.options.depth, 1);
+                assert_eq!(c2.items.len(), 1);
+                assert_eq!(c2.items[0].point, Point::new(110.0, 10.0));
+                assert!(c2.children.is_none());
+
+                assert_eq!(c3.x, 100.0);
+                assert_eq!(c3.y, 100.0);
+                assert_eq!(c3.width, 100.0);
+                assert_eq!(c3.height, 100.0);
+                assert_eq!(c3.options.max_items, 1);
+                assert_eq!(c3.options.max_depth, 3);
+                assert_eq!(c3.options.depth, 1);
+                assert_eq!(c3.items.len(), 1);
+                assert_eq!(c3.items[0].point, Point::new(110.0, 110.0));
+                assert!(c3.children.is_none());
+
+                assert_eq!(c4.x, 0.0);
+                assert_eq!(c4.y, 100.0);
+                assert_eq!(c4.width, 100.0);
+                assert_eq!(c4.height, 100.0);
+                assert_eq!(c4.options.max_items, 1);
+                assert_eq!(c4.options.max_depth, 3);
+                assert_eq!(c4.options.depth, 1);
+                assert_eq!(c4.items.len(), 1);
+                assert_eq!(c4.items[0].point, Point::new(10.0, 110.0));
+                assert!(c4.children.is_none());
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]
