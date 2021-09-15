@@ -47,10 +47,6 @@ where
     pub fn new(point: Point, data: &'a T) -> Self {
         Self { point, data }
     }
-
-    pub fn data(&self) -> &'a T {
-        self.data
-    }
 }
 
 impl<'a, T> Deref for Item<'a, T> {
